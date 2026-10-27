@@ -1,0 +1,24 @@
+```mermaid
+flowchart TD
+    A([Hospital User]) --> B[Submit Emergency Request\nblood group · units · urgency]
+    B --> C{Validate Input}
+    C -->|Invalid| D[Show Error Message]
+    C -->|Valid| E[Create Request Record\nstatus = pending\nreference = BBR-YYYYMMDD-XXXXXX]
+    E --> F[Log Audit Event]
+    F --> G[Search Matching Inventory\nmatching_service.find_matching_lots]
+    G --> H{Candidates Found?}
+    H -->|No| I[Show Warning: No Stock\nRequest stays pending]
+    H -->|Yes| J[Show Candidate Lots\nBlood Bank · Location · Available · Expiry]
+    J --> K{Blood Bank Reserves?}
+    K -->|Yes| L[make_reservation\nAtomic Transaction]
+    L --> M{Sufficient Stock?}
+    M -->|No| N[Raise InsufficientStock Error\nRollback Transaction]
+    M -->|Yes| O[Update units_reserved\nCreate Reservation Record\nUpdate Request → matched]
+    O --> P[Log Audit Event]
+    P --> Q{Physically Delivered?}
+    Q -->|No| R[Reservation stays active]
+    Q -->|Yes| S[Mark Reservation fulfilled\nUpdate Request → fulfilled]
+    K -->|Cancel| T[Hospital Cancels Request]
+    T --> U[release_reservations_for_request\nRestore units_reserved\nUpdate Request → cancelled]
+    U --> V[Log Audit Event]
+```

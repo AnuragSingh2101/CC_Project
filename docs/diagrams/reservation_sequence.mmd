@@ -1,0 +1,28 @@
+```mermaid
+sequenceDiagram
+    actor H as Hospital User
+    participant UI as Streamlit UI
+    participant RS as ReservationService
+    participant DB as Database (SQLite/PG)
+    participant Audit as AuditLog
+
+    H->>UI: Click "Reserve Units" for Request #R
+    UI->>RS: make_reservation(request_id=R, lot_id=L, units=N)
+    RS->>DB: BEGIN TRANSACTION
+    RS->>DB: SELECT InventoryLot WHERE id=L
+    DB-->>RS: lot (units_total=100, units_reserved=30) → available=70
+    RS->>RS: Check: N <= available? (N=20, available=70 → OK)
+    RS->>DB: UPDATE inventory_lots SET units_reserved=50 WHERE id=L
+    RS->>DB: INSERT INTO reservations (request_id=R, lot_id=L, units=20, status='active')
+    RS->>DB: UPDATE emergency_requests SET status='matched' WHERE id=R
+    RS->>Audit: INSERT audit_log (action='make_reservation', ...)
+    RS->>DB: COMMIT
+    DB-->>RS: Success
+    RS-->>UI: Reservation object (id=42)
+    UI-->>H: ✅ Reserved 20 units (Reservation #42)
+
+    Note over RS,DB: If stock insufficient at commit time:
+    RS->>DB: ROLLBACK
+    RS-->>UI: ValueError("Insufficient stock")
+    UI-->>H: ❌ Error shown to user
+```

@@ -1,0 +1,77 @@
+```mermaid
+erDiagram
+    ORGANIZATIONS {
+        int id PK
+        string name
+        string type "hospital|blood_bank"
+        string address
+        string city
+        string state
+        float latitude
+        float longitude
+        string contact_number
+        datetime created_at
+    }
+
+    USERS {
+        int id PK
+        string username UK
+        string password_hash
+        string role "admin|hospital|blood_bank"
+        int organization_id FK
+        bool is_active
+        datetime created_at
+    }
+
+    INVENTORY_LOTS {
+        int id PK
+        int blood_bank_id FK
+        string blood_group "A+|A-|B+|B-|AB+|AB-|O+|O-"
+        int units_total
+        int units_reserved
+        date expiry_date
+        datetime created_at
+        datetime updated_at
+    }
+
+    EMERGENCY_REQUESTS {
+        int id PK
+        string reference UK "BBR-YYYYMMDD-XXXXXX"
+        int hospital_id FK
+        string blood_group
+        int units_requested
+        string urgency "routine|urgent|critical"
+        string status "pending|matched|fulfilled|cancelled"
+        datetime required_by
+        string notes
+        datetime created_at
+        datetime updated_at
+    }
+
+    RESERVATIONS {
+        int id PK
+        int request_id FK
+        int inventory_lot_id FK
+        int units_reserved
+        string status "active|released|fulfilled"
+        datetime created_at
+        datetime updated_at
+    }
+
+    AUDIT_LOGS {
+        int id PK
+        int user_id FK
+        string action
+        string entity_type
+        int entity_id
+        string details
+        datetime created_at
+    }
+
+    ORGANIZATIONS ||--o{ USERS : "has"
+    ORGANIZATIONS ||--o{ INVENTORY_LOTS : "blood_bank owns"
+    ORGANIZATIONS ||--o{ EMERGENCY_REQUESTS : "hospital submits"
+    EMERGENCY_REQUESTS ||--o{ RESERVATIONS : "has"
+    INVENTORY_LOTS ||--o{ RESERVATIONS : "reserved from"
+    USERS ||--o{ AUDIT_LOGS : "generates"
+```

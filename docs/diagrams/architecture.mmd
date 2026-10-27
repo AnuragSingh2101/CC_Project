@@ -1,0 +1,36 @@
+```mermaid
+graph TB
+    User["👤 Browser User\n(Admin / Blood Bank / Hospital)"]
+
+    subgraph Cloud["☁️ Streamlit Community Cloud"]
+        App["🐍 Streamlit Application\napp.py + pages/"]
+        Auth["🔐 Auth Service\nBcrypt + Session State"]
+        Services["⚙️ Service Layer\nInventory · Requests · Reservations · Matching"]
+        Models["🗄️ ORM Models\nSQLAlchemy 2.x"]
+    end
+
+    subgraph DB["💾 Database Layer"]
+        SQLite["SQLite (Local Dev)\nWAL Mode · FK Enforcement"]
+        PG["PostgreSQL (Cloud)\nManaged DB Service"]
+    end
+
+    subgraph Security["🛡️ Security & Monitoring"]
+        RBAC["Role-Based Access Control\nadmin · hospital · blood_bank"]
+        Audit["Audit Log\nAll state changes"]
+        Env["Environment Config\n.env / st.secrets"]
+    end
+
+    User -->|HTTPS| App
+    App --> Auth
+    Auth --> RBAC
+    App --> Services
+    Services --> Models
+    Models --> SQLite
+    Models --> PG
+    Services --> Audit
+    App --> Env
+
+    style Cloud fill:#eaf4fb,stroke:#1a5276
+    style DB fill:#eafaf1,stroke:#1e8449
+    style Security fill:#fef9e7,stroke:#d68910
+```

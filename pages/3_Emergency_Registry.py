@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from services.auth_service import require_login, get_current_user
 from services.request_service import (
     create_request, get_requests_for_hospital, get_all_requests,
-    cancel_request, update_request_status
+    cancel_request, update_request_status, escalate_overdue
 )
 from services.reservation_service import (
     make_reservation, release_reservation, fulfill_reservation,
@@ -20,7 +20,7 @@ from services.matching_service import find_matching_lots
 from database.connection import get_session
 from models.emergency_request import EmergencyRequest
 from models.organization import Organization
-from config.settings import BLOOD_GROUPS, BLOOD_COMPONENTS, URGENCY_LEVELS, REQUEST_STATUSES
+from config.settings import BLOOD_GROUPS, BLOOD_COMPONENTS, URGENCY_LEVELS, REQUEST_STATUSES, SLA_MINUTES
 
 require_login()
 user = get_current_user()
@@ -35,6 +35,26 @@ This platform coordinates candidate inventory for emergency logistics. It is <st
 and does not replace ABO/Rh typing, crossmatching, antibody testing, or bedside clinician sign-off.
 </div>
 """, unsafe_allow_html=True)
+
+# ─── Escalation button (Admin only) ──────────────────────────────
+if role == "admin":
+    col_esc1, col_esc2 = st.columns([3, 1])
+    with col_esc2:
+        if st.button("⚡ Run Escalation Check", type="secondary", help="Check for overdue requests and notify nearby blood banks"):
+            db_esc = get_session()
+            try:
+                count = escalate_overdue(db=db_esc, user_id=user['id'])
+                db_esc.commit()
+                if count > 0:
+                    st.success(f"✅ Escalated {count} overdue request(s) and notified nearby blood banks.")
+                else:
+                    st.info("No overdue requests found.")
+                st.rerun()
+            except Exception as e:
+                db_esc.rollback()
+                st.error(f"Escalation failed: {e}")
+            finally:
+                db_esc.close()
 
 db = get_session()
 try:
@@ -95,7 +115,7 @@ try:
             finally:
                 db_act.close()
 
-    # ── Requests Table ─────────────────────────────────────────
+    # ── Requests Table with Auto-Refresh ─────────────────────────
     st.subheader("Active & Past Blood Requests")
 
     with st.expander("Filter Requests", expanded=False):
@@ -111,38 +131,61 @@ try:
     urgency_filter = None if filter_urgency == "All" else filter_urgency
     bg_filter = None if filter_bg_req == "All" else filter_bg_req
 
-    if role == "hospital":
-        requests = get_requests_for_hospital(
-            db,
-            hospital_id=user['organization_id'],
-            status=status_filter,
-            urgency=urgency_filter
-        )
-    else:
-        requests = get_all_requests(
-            db,
-            status=status_filter,
-            urgency=urgency_filter,
-            blood_group=bg_filter
-        )
+    # Use st.fragment for auto-refresh every 15 seconds
+    @st.fragment(run_every=15)
+    def render_requests_table():
+        db_frag = get_session()
+        try:
+            if role == "hospital":
+                requests = get_requests_for_hospital(
+                    db_frag,
+                    hospital_id=user['organization_id'],
+                    status=status_filter,
+                    urgency=urgency_filter
+                )
+            else:
+                requests = get_all_requests(
+                    db_frag,
+                    status=status_filter,
+                    urgency=urgency_filter,
+                    blood_group=bg_filter
+                )
+
+            if requests:
+                req_rows = []
+                for r in requests:
+                    # Determine overdue badge
+                    overdue_badge = ""
+                    if r.status == "pending" and r.is_overdue:
+                        overdue_badge = " 🔴 OVERDUE"
+                    elif r.is_escalated:
+                        overdue_badge = " 🟠 ESCALATED"
+
+                    req_rows.append({
+                        "Ref": r.reference,
+                        "Hospital": r.hospital.name if r.hospital else "—",
+                        "Blood Group": r.blood_group,
+                        "Component": r.component.replace("_", " ").title(),
+                        "Units Needed": r.units_requested,
+                        "Urgency": r.urgency.title(),
+                        "Status": r.status.title() + overdue_badge,
+                        "Elapsed (min)": round(r.elapsed_minutes, 1) if r.created_at else "—",
+                        "SLA (min)": SLA_MINUTES.get(r.urgency, 1440),
+                        "Created At": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "—",
+                        "ID": r.id
+                    })
+                req_df = pd.DataFrame(req_rows)
+                st.dataframe(req_df.drop(columns=["ID"]), use_container_width=True, hide_index=True)
+                return requests
+            else:
+                st.info("No blood requests found.")
+                return []
+        finally:
+            db_frag.close()
+
+    requests = render_requests_table()
 
     if requests:
-        req_rows = []
-        for r in requests:
-            req_rows.append({
-                "Ref": r.reference,
-                "Hospital": r.hospital.name if r.hospital else "—",
-                "Blood Group": r.blood_group,
-                "Component": r.component.replace("_", " ").title(),
-                "Units Needed": r.units_requested,
-                "Urgency": r.urgency.title(),
-                "Status": r.status.title(),
-                "Created At": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "—",
-                "ID": r.id
-            })
-        req_df = pd.DataFrame(req_rows)
-        st.dataframe(req_df.drop(columns=["ID"]), use_container_width=True, hide_index=True)
-
         st.divider()
 
         # ── Request Actions & Candidate Search ────────────────────
@@ -157,6 +200,10 @@ try:
             st.markdown(f"**Hospital:** {selected_req.hospital.name if selected_req.hospital else '—'}")
             st.markdown(f"**Blood Group:** `{selected_req.blood_group}` | **Component:** `{selected_req.component.replace('_', ' ').title()}`")
             st.markdown(f"**Units:** `{selected_req.units_requested}` | **Status:** `{selected_req.status}`")
+            if selected_req.is_overdue:
+                st.markdown('<span class="badge badge-critical">OVERDUE</span>', unsafe_allow_html=True)
+            if selected_req.is_escalated:
+                st.markdown('<span class="badge" style="background:#fef3e2;color:#d68910;">ESCALATED</span>', unsafe_allow_html=True)
             if selected_req.notes:
                 st.markdown(f"**Notes:** {selected_req.notes}")
 

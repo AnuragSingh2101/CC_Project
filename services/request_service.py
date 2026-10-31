@@ -6,8 +6,10 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from models.emergency_request import EmergencyRequest, _generate_ref
 from models.organization import Organization
+from models.notification import Notification
 from services.audit_service import log_action
-from config.settings import BLOOD_GROUPS, BLOOD_COMPONENTS, URGENCY_LEVELS
+from config.settings import BLOOD_GROUPS, BLOOD_COMPONENTS, URGENCY_LEVELS, SLA_MINUTES, ESCALATION_RADIUS_KM
+from services.matching_service import find_matching_lots
 import logging
 
 logger = logging.getLogger(__name__)
@@ -179,3 +181,85 @@ def cancel_request(
     # Release any active reservations
     release_reservations_for_request(db=db, request_id=request_id, user_id=user_id)
     return req
+
+
+def escalate_overdue(db: Session, user_id: int = None) -> int:
+    """
+    Find pending requests past their SLA, mark them escalated, and create
+    notifications for blood banks within the configured radius.
+    Returns the number of requests escalated.
+    """
+    now = datetime.now(timezone.utc)
+    pending_requests = db.query(EmergencyRequest).filter(
+        EmergencyRequest.status == "pending",
+        EmergencyRequest.is_escalated == False  # noqa
+    ).all()
+
+    escalated_count = 0
+    for req in pending_requests:
+        # Check if request is past SLA
+        sla_limit = SLA_MINUTES.get(req.urgency, 1440)
+        created = req.created_at
+        if created and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        elapsed_minutes = (now - created).total_seconds() / 60.0 if created else 0
+
+        if elapsed_minutes > sla_limit:
+            # Mark as escalated
+            req.is_escalated = True
+            req.escalated_at = now
+            req.updated_at = now
+
+            # Find nearby blood banks using matching service
+            req_hosp = req.hospital
+            if req_hosp and req_hosp.latitude and req_hosp.longitude:
+                nearby_banks = find_matching_lots(
+                    db=db,
+                    blood_group=req.blood_group,
+                    component=req.component,
+                    units_needed=1,  # just to get banks in radius
+                    requester_lat=req_hosp.latitude,
+                    requester_lon=req_hosp.longitude,
+                    max_radius_km=ESCALATION_RADIUS_KM,
+                    max_results=100
+                )
+                # Extract unique blood bank IDs
+                bank_ids = set(c["blood_bank_id"] for c in nearby_banks)
+            else:
+                # Fallback: all blood banks
+                bank_ids = set(
+                    db.query(Organization.id).filter(Organization.type == "blood_bank").all()
+                )
+                bank_ids = {b[0] for b in bank_ids}
+
+            # Create notification for each blood bank
+            for bank_id in bank_ids:
+                notif = Notification(
+                    organization_id=bank_id,
+                    title=f"🚨 ESCALATED: {req.urgency.title()} Request Overdue",
+                    message=(
+                        f"Emergency request {req.reference} ({req.blood_group} "
+                        f"{req.component}, {req.units_requested} units) from "
+                        f"{req_hosp.name if req_hosp else 'Unknown Hospital'} "
+                        f"has exceeded its {sla_limit}-minute SLA. "
+                        f"Elapsed: {elapsed_minutes:.0f} minutes. "
+                        f"Please review and respond urgently."
+                    ),
+                    is_read=False,
+                )
+                db.add(notif)
+
+            log_action(
+                db=db,
+                user_id=user_id,
+                action="escalate_request",
+                entity_type="emergency_request",
+                entity_id=req.id,
+                details=f"Escalated overdue {req.urgency} request after {elapsed_minutes:.0f} min (SLA: {sla_limit} min)"
+            )
+            escalated_count += 1
+
+    if escalated_count > 0:
+        db.flush()
+
+    return escalated_count

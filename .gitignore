@@ -21,6 +21,8 @@ build/
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Streamlit
 .streamlit/secrets.toml
@@ -45,3 +47,10 @@ coverage.xml
 # Logs
 *.log
 logs/
+
+# Docker
+.docker/
+
+# API
+api/__pycache__/
+api/.pytest_cache/

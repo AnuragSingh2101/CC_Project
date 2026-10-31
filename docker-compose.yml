@@ -1,0 +1,111 @@
+# docker-compose.yml — Cloud Blood Bank & Emergency Registry
+# Services: streamlit (frontend), api (FastAPI backend), postgres (database)
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bloodbank_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-blood_bank_db}
+      POSTGRES_USER: ${POSTGRES_USER:-bloodbank}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bloodbank} -d ${POSTGRES_DB:-blood_bank_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bloodbank_net
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bloodbank_api
+    command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-bloodbank}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-blood_bank_db}
+      - SECRET_KEY=${SECRET_KEY:-changeme-in-production}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme-in-production}
+      - DEBUG=${DEBUG:-false}
+      - SLA_CRITICAL_MINUTES=${SLA_CRITICAL_MINUTES:-15}
+      - SLA_URGENT_MINUTES=${SLA_URGENT_MINUTES:-60}
+      - SLA_ROUTINE_MINUTES=${SLA_ROUTINE_MINUTES:-1440}
+      - ESCALATION_RADIUS_KM=${ESCALATION_RADIUS_KM:-100.0}
+      - LOCKOUT_MAX_ATTEMPTS=${LOCKOUT_MAX_ATTEMPTS:-5}
+      - LOCKOUT_DURATION_MINUTES=${LOCKOUT_DURATION_MINUTES:-15}
+      # SMTP (optional)
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM=${SMTP_FROM:-noreply@cloudbloodbank.org}
+      - SMTP_TLS=${SMTP_TLS:-true}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bloodbank_net
+    restart: unless-stopped
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bloodbank_streamlit
+    command: python -m streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-bloodbank}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-blood_bank_db}
+      - SECRET_KEY=${SECRET_KEY:-changeme-in-production}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme-in-production}
+      - DEBUG=${DEBUG:-false}
+      - SLA_CRITICAL_MINUTES=${SLA_CRITICAL_MINUTES:-15}
+      - SLA_URGENT_MINUTES=${SLA_URGENT_MINUTES:-60}
+      - SLA_ROUTINE_MINUTES=${SLA_ROUTINE_MINUTES:-1440}
+      - ESCALATION_RADIUS_KM=${ESCALATION_RADIUS_KM:-100.0}
+      - LOCKOUT_MAX_ATTEMPTS=${LOCKOUT_MAX_ATTEMPTS:-5}
+      - LOCKOUT_DURATION_MINUTES=${LOCKOUT_DURATION_MINUTES:-15}
+      - DEMO_MODE=${DEMO_MODE:-false}
+      # SMTP (optional)
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM=${SMTP_FROM:-noreply@cloudbloodbank.org}
+      - SMTP_TLS=${SMTP_TLS:-true}
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bloodbank_net
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:latest
+    container_name: bloodbank_adminer
+    ports:
+      - "8088:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bloodbank_net
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  bloodbank_net:
+    driver: bridge

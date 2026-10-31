@@ -46,7 +46,7 @@ if DATABASE_URL.startswith("sqlite:///") and not DATABASE_URL.startswith("sqlite
 
 # Application
 APP_ENV = get_setting("APP_ENV", "development")
-DEBUG = get_setting("DEBUG", "false").lower() == "true"
+DEBUG = get_setting("DEBUG", "true" if APP_ENV == "development" else "false").lower() == "true"
 SECRET_KEY = get_setting("SECRET_KEY", "dev-secret-key-change-in-production")
 
 # Admin setup

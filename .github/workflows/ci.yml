@@ -1,0 +1,77 @@
+# GitHub Actions CI Workflow
+# Runs on push and PR: lint, test with coverage, fail if services/ coverage < 80%
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./CCproject
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: blood_bank_db
+          POSTGRES_USER: bloodbank
+          POSTGRES_PASSWORD: testpass
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bloodbank -d blood_bank_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install -r api/requirements.txt
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql://bloodbank:testpass@localhost:5432/blood_bank_db
+        run: |
+          alembic upgrade head
+
+      - name: Run tests with coverage
+        env:
+          DATABASE_URL: postgresql://bloodbank:testpass@localhost:5432/blood_bank_db
+          SECRET_KEY: test-secret-key-for-ci
+          ADMIN_PASSWORD: TestAdmin123!
+          DEBUG: "true"
+        run: |
+          PYTHONPATH=. pytest tests/ -v --cov=services --cov-report=xml --cov-report=term-missing --cov-fail-under=80
+
+      - name: Run API tests
+        env:
+          DATABASE_URL: postgresql://bloodbank:testpass@localhost:5432/blood_bank_db
+          SECRET_KEY: test-secret-key-for-ci
+          ADMIN_PASSWORD: TestAdmin123!
+          DEBUG: "true"
+        run: |
+          PYTHONPATH=. pytest api/tests/ -v
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false

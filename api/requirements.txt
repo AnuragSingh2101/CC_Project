@@ -1,0 +1,5 @@
+# API dependencies are now in the main requirements.txt at project root
+# This file is kept for reference/documentation purposes only
+# 
+# To install API dependencies:
+# pip install -r ../requirements.txt

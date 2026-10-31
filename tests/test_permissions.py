@@ -5,7 +5,7 @@ Covers: TC-12 through TC-15
 import pytest
 from models.user import User
 from models.organization import Organization
-from services.auth_service import create_user
+from services.auth_service import create_user, register_hospital
 from services.inventory_service import create_lot, update_lot_quantity
 from services.request_service import create_request, update_request_status
 
@@ -48,6 +48,49 @@ class TestAuthentication:
         with pytest.raises(ValueError, match="Invalid role"):
             create_user(db=db, username="badrole_user", password="ValidPass@123!",
                         role="superuser")
+
+    def test_register_hospital_success(self, db):
+        org, user = register_hospital(
+            db=db,
+            name="Apex General Hospital",
+            city="Bengaluru",
+            state="Karnataka",
+            address="100 Feet Ring Road",
+            contact_number="+91 80 12345678",
+            username="apex_admin",
+            password="ApexSecurePass@123!"
+        )
+        db.flush()
+        assert org.id is not None
+        assert org.type == "hospital"
+        assert org.name == "Apex General Hospital"
+        assert user.id is not None
+        assert user.role == "hospital"
+        assert user.organization_id == org.id
+        assert user.check_password("ApexSecurePass@123!") is True
+        # Verify coordinates resolved from city
+        assert org.latitude is not None
+        assert org.longitude is not None
+
+    def test_register_hospital_duplicate_username_fails(self, db):
+        register_hospital(
+            db=db,
+            name="Hospital Alpha",
+            city="Mumbai",
+            state="Maharashtra",
+            username="hosp_alpha",
+            password="AlphaPass@123!"
+        )
+        db.flush()
+        with pytest.raises(ValueError, match="already taken"):
+            register_hospital(
+                db=db,
+                name="Hospital Beta",
+                city="Mumbai",
+                state="Maharashtra",
+                username="hosp_alpha",
+                password="BetaPass@123!"
+            )
 
 
 class TestCrossOrganizationAccess:
